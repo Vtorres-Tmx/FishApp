@@ -5,8 +5,8 @@ import { Inter } from 'next/font/google'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Fish Farm Dashboard',
-  description: 'Real-time monitoring dashboard for fish farm operations',
+  title: 'Pond Dashboard',
+  description: 'Real-time monitoring dashboard for pond operations',
 }
 
 export default function RootLayout({
@@ -23,7 +23,10 @@ export default function RootLayout({
               <div className="flex justify-between items-center py-6">
                 <div className="flex items-center">
                   <div className="flex-shrink-0">
-                    <h1 className="text-2xl font-bold text-gray-900">🐟 Fish Farm Dashboard</h1>
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">🐟</span>
+                      <h1 className="text-2xl font-bold text-gray-900">Pond Dashboard</h1>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center space-x-4">

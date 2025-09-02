@@ -24,12 +24,32 @@ export default function Dashboard() {
   const [hoveredFarm, setHoveredFarm] = useState<string | null>(null)
   const [activeChartType, setActiveChartType] = useState<'sensor' | 'weather' | 'operational'>('sensor')
   const [error, setError] = useState<string | null>(null)
+  const [allData, setAllData] = useState<{
+    sensorData: (SensorReading & { farm_name: string })[]
+    weatherData: (WeatherData & { farm_name: string })[]
+    operationalData: (OperationalData & { farm_name: string })[]
+  } | null>(null)
+  const [currentDataIndex, setCurrentDataIndex] = useState(0)
+  const [isRealTimeActive, setIsRealTimeActive] = useState(false)
+  const [lastUpdateTime, setLastUpdateTime] = useState<Date>(new Date())
 
   useEffect(() => {
-    fetchDashboardData()
+    fetchAllData()
   }, [])
 
-  const fetchDashboardData = async () => {
+  useEffect(() => {
+    let interval: NodeJS.Timeout
+    if (isRealTimeActive && allData) {
+      interval = setInterval(() => {
+        cycleData()
+      }, 3000) // Update every 3 seconds
+    }
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [isRealTimeActive, allData, currentDataIndex])
+
+  const fetchAllData = async () => {
     try {
       setLoading(true)
       setError(null)
@@ -42,7 +62,7 @@ export default function Dashboard() {
 
       if (farmsError) throw farmsError
 
-      // Fetch latest sensor data with farm names
+      // Fetch ALL sensor data with farm names (more records for cycling)
       const { data: sensorData, error: sensorError } = await supabase
         .from('sensor_readings')
         .select(`
@@ -50,11 +70,11 @@ export default function Dashboard() {
           farms!inner(farm_name)
         `)
         .order('timestamp', { ascending: false })
-        .limit(100)
+        .limit(500) // Increased limit for more data to cycle through
 
       if (sensorError) throw sensorError
 
-      // Fetch latest weather data with farm names
+      // Fetch ALL weather data with farm names
       const { data: weatherData, error: weatherError } = await supabase
         .from('weather_data')
         .select(`
@@ -62,11 +82,11 @@ export default function Dashboard() {
           farms!inner(farm_name)
         `)
         .order('timestamp', { ascending: false })
-        .limit(100)
+        .limit(500)
 
       if (weatherError) throw weatherError
 
-      // Fetch latest operational data with farm names
+      // Fetch ALL operational data with farm names
       const { data: operationalData, error: operationalError } = await supabase
         .from('operational_data')
         .select(`
@@ -74,31 +94,39 @@ export default function Dashboard() {
           farms!inner(farm_name)
         `)
         .order('timestamp', { ascending: false })
-        .limit(100)
+        .limit(500)
 
       if (operationalError) throw operationalError
 
       // Transform data to include farm_name at the top level
       const transformedSensorData = sensorData?.map(item => ({
         ...item,
-        farm_name: (item.farms as any).farm_name
+        farm_name: item.farms.farm_name
       })) || []
 
       const transformedWeatherData = weatherData?.map(item => ({
         ...item,
-        farm_name: (item.farms as any).farm_name
+        farm_name: item.farms.farm_name
       })) || []
 
       const transformedOperationalData = operationalData?.map(item => ({
         ...item,
-        farm_name: (item.farms as any).farm_name
+        farm_name: item.farms.farm_name
       })) || []
 
+      // Store all data for cycling
+      setAllData({
+        sensorData: transformedSensorData,
+        weatherData: transformedWeatherData,
+        operationalData: transformedOperationalData
+      })
+
+      // Set initial display data
       setData({
         farms: farms || [],
-        latestSensorData: transformedSensorData,
-        latestWeatherData: transformedWeatherData,
-        latestOperationalData: transformedOperationalData
+        latestSensorData: transformedSensorData.slice(0, 20),
+        latestWeatherData: transformedWeatherData.slice(0, 20),
+        latestOperationalData: transformedOperationalData.slice(0, 20)
       })
     } catch (err) {
       console.error('Error fetching dashboard data:', err)
@@ -106,6 +134,40 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const cycleData = () => {
+    if (!allData || !data) return
+
+    const batchSize = 20
+    const maxIndex = Math.max(
+      Math.floor(allData.sensorData.length / batchSize),
+      Math.floor(allData.weatherData.length / batchSize),
+      Math.floor(allData.operationalData.length / batchSize)
+    )
+
+    const nextIndex = (currentDataIndex + 1) % maxIndex
+    setCurrentDataIndex(nextIndex)
+
+    const startIdx = nextIndex * batchSize
+    const endIdx = startIdx + batchSize
+
+    setData({
+      farms: data.farms,
+      latestSensorData: allData.sensorData.slice(startIdx, endIdx),
+      latestWeatherData: allData.weatherData.slice(startIdx, endIdx),
+      latestOperationalData: allData.operationalData.slice(startIdx, endIdx)
+    })
+    
+    setLastUpdateTime(new Date())
+  }
+
+  const toggleRealTime = () => {
+    setIsRealTimeActive(!isRealTimeActive)
+  }
+
+  const fetchDashboardData = () => {
+    fetchAllData()
   }
 
   if (loading) {
@@ -144,7 +206,7 @@ export default function Dashboard() {
     )
   }
 
-  // Calculate summary statistics
+  // Calculate summary statistics (these will update in real-time)
   const totalFarms = data.farms.length
   const avgTemperature = data.latestSensorData.length > 0 
     ? (data.latestSensorData.reduce((sum, item) => sum + item.temperature, 0) / data.latestSensorData.length).toFixed(1)
@@ -156,51 +218,65 @@ export default function Dashboard() {
 
   return (
     <div className="px-4 sm:px-6 lg:px-8">
+      {/* Real-time Status Banner */}
+      {isRealTimeActive && (
+        <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+            <span className="text-green-800 font-medium">Live Data Mode Active</span>
+            <span className="text-green-600 text-sm">Updates every 3 seconds</span>
+          </div>
+          <span className="text-green-600 text-sm">
+             Last updated: {lastUpdateTime.toLocaleTimeString()}
+           </span>
+        </div>
+      )}
+      
       {/* Header Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="metric-card">
+        <div className={`metric-card transition-all duration-500 ${isRealTimeActive ? 'ring-2 ring-green-200 bg-green-50' : ''}`}>
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <Activity className="h-8 w-8 text-blue-600" />
             </div>
             <div className="ml-4">
-              <div className="stat-number">{totalFarms}</div>
+              <div className={`stat-number transition-all duration-300 ${isRealTimeActive ? 'text-green-700' : ''}`}>{totalFarms}</div>
               <div className="stat-label">Active Farms</div>
             </div>
           </div>
         </div>
 
-        <div className="metric-card">
+        <div className={`metric-card transition-all duration-500 ${isRealTimeActive ? 'ring-2 ring-green-200 bg-green-50' : ''}`}>
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <Thermometer className="h-8 w-8 text-red-500" />
             </div>
             <div className="ml-4">
-              <div className="stat-number">{avgTemperature}°C</div>
+              <div className={`stat-number transition-all duration-300 ${isRealTimeActive ? 'text-green-700' : ''}`}>{avgTemperature}°C</div>
               <div className="stat-label">Avg Temperature</div>
             </div>
           </div>
         </div>
 
-        <div className="metric-card">
+        <div className={`metric-card transition-all duration-500 ${isRealTimeActive ? 'ring-2 ring-green-200 bg-green-50' : ''}`}>
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <Droplets className="h-8 w-8 text-blue-500" />
             </div>
             <div className="ml-4">
-              <div className="stat-number">{avgPH}</div>
+              <div className={`stat-number transition-all duration-300 ${isRealTimeActive ? 'text-green-700' : ''}`}>{avgPH}</div>
               <div className="stat-label">Avg pH Level</div>
             </div>
           </div>
         </div>
 
-        <div className="metric-card">
+        <div className={`metric-card transition-all duration-500 ${isRealTimeActive ? 'ring-2 ring-green-200 bg-green-50' : ''}`}>
           <div className="flex items-center">
             <div className="flex-shrink-0">
               <Wind className="h-8 w-8 text-green-500" />
             </div>
             <div className="ml-4">
-              <div className="stat-number">{activeAerators}</div>
+              <div className={`stat-number transition-all duration-300 ${isRealTimeActive ? 'text-green-700' : ''}`}>{activeAerators}</div>
               <div className="stat-label">Active Aerators</div>
             </div>
           </div>
@@ -215,6 +291,20 @@ export default function Dashboard() {
             Interactive Farm Map
           </h2>
           <div className="flex gap-2">
+            <button
+              onClick={toggleRealTime}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                isRealTimeActive
+                  ? 'bg-green-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <div className={`w-2 h-2 rounded-full ${
+                isRealTimeActive ? 'bg-white animate-pulse' : 'bg-gray-400'
+              }`}></div>
+              {isRealTimeActive ? 'Live Data' : 'Start Live'}
+            </button>
+            <div className="w-px bg-gray-300 mx-1"></div>
             <button
               onClick={() => setActiveChartType('sensor')}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
