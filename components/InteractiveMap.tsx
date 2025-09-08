@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { Map, Marker, Popup } from 'react-map-gl/mapbox'
-import { Farm, SensorReading, WeatherData, OperationalData } from '../lib/supabase'
+import { Farm, SensorReading, WeatherData, OperationalData, ElectricalComponent, MaintenanceRecord, supabase } from '../lib/supabase'
 
 interface InteractiveMapProps {
   farms: Farm[]
@@ -22,8 +22,49 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
   hoveredFarm
 }) => {
   const [selectedFarm, setSelectedFarm] = useState<Farm | null>(null)
-  const [tooltipFarm, setTooltipFarm] = useState<Farm | null>(null)
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+  const [maintenanceData, setMaintenanceData] = useState<MaintenanceRecord[]>([])
+  const [electricalComponents, setElectricalComponents] = useState<ElectricalComponent[]>([])
+
+  // Fetch maintenance and electrical data
+  useEffect(() => {
+    const fetchMaintenanceData = async () => {
+      try {
+        // Fetch electrical components (generators)
+        const { data: components, error: componentsError } = await supabase
+          .from('electrical_components')
+          .select('*')
+          .eq('component_type', 'generator')
+        
+        if (componentsError) {
+          console.error('Error fetching electrical components:', componentsError)
+          return
+        }
+        
+        setElectricalComponents(components || [])
+        
+        // Fetch maintenance records for these components
+        if (components && components.length > 0) {
+          const componentIds = components.map(c => c.id)
+          const { data: maintenance, error: maintenanceError } = await supabase
+            .from('maintenance_records')
+            .select('*')
+            .in('component_id', componentIds)
+            .order('maintenance_date', { ascending: false })
+          
+          if (maintenanceError) {
+            console.error('Error fetching maintenance records:', maintenanceError)
+            return
+          }
+          
+          setMaintenanceData(maintenance || [])
+        }
+      } catch (error) {
+        console.error('Error in fetchMaintenanceData:', error)
+      }
+    }
+    
+    fetchMaintenanceData()
+  }, [])
   
   // Calculate center and zoom based on farms
   const mapCenter = useMemo(() => {
@@ -93,18 +134,11 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     return colors[health as keyof typeof colors] || colors.unknown
   }, [])
 
-  // Handle marker click
-  const handleMarkerClick = useCallback((farm: Farm) => {
-    setSelectedFarm(farm)
-  }, [])
+
 
   // Handle marker hover
   const handleMarkerHover = useCallback((farm: Farm | null, event?: React.MouseEvent) => {
     onFarmHover(farm ? farm.farm_name : null)
-    setTooltipFarm(farm)
-    if (event) {
-      setMousePosition({ x: event.clientX, y: event.clientY })
-    }
   }, [onFarmHover])
 
   // Get popup content
@@ -112,6 +146,14 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     const latestSensor = sensorData
       .filter(reading => reading.farm_id === farm.id)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+    
+    // Get generator and maintenance info for this farm
+    const farmGenerator = electricalComponents.find(comp => comp.farm_id === farm.id)
+    const latestMaintenance = farmGenerator 
+      ? maintenanceData
+          .filter(record => record.component_id === farmGenerator.id)
+          .sort((a, b) => new Date(b.maintenance_date).getTime() - new Date(a.maintenance_date).getTime())[0]
+      : null
     
     const health = getFarmHealth(farm)
     const healthEmoji = {
@@ -153,9 +195,58 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
         ) : (
           <p className="text-xs text-gray-500">No sensor data available</p>
         )}
+        
+        {/* Generator and Maintenance Information */}
+        {farmGenerator && (
+          <div className="mt-2 pt-2 border-t border-gray-200">
+            <div className="text-xs font-medium text-gray-700 mb-1">⚡ Generator Status</div>
+            <div className="space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span>Status:</span>
+                <span className={`font-medium ${
+                  farmGenerator.status === 'operational' ? 'text-green-600' :
+                  farmGenerator.status === 'maintenance' ? 'text-yellow-600' :
+                  'text-red-600'
+                }`}>
+                  {farmGenerator.status.charAt(0).toUpperCase() + farmGenerator.status.slice(1)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Name:</span>
+                <span className="font-medium truncate">{farmGenerator.component_name}</span>
+              </div>
+              {latestMaintenance && (
+                <>
+                  <div className="flex justify-between">
+                    <span>🔧 Last Maintenance:</span>
+                    <span className="font-medium">
+                      {new Date(latestMaintenance.maintenance_date).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Type:</span>
+                    <span className="font-medium truncate">{latestMaintenance.maintenance_type}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Technician:</span>
+                    <span className="font-medium truncate">{latestMaintenance.technician_name}</span>
+                  </div>
+                  {latestMaintenance.next_maintenance_date && (
+                    <div className="flex justify-between">
+                      <span>📅 Next Due:</span>
+                      <span className="font-medium">
+                        {new Date(latestMaintenance.next_maintenance_date).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     )
-  }, [sensorData, getFarmHealth])
+  }, [sensorData, getFarmHealth, electricalComponents, maintenanceData])
 
   return (
     <div className="w-full h-96 rounded-lg overflow-hidden border border-gray-200">
@@ -176,15 +267,19 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
               key={farm.id}
               longitude={farm.longitude}
               latitude={farm.latitude}
-              onClick={() => handleMarkerClick(farm)}
             >
               <div
                 className={`cursor-pointer transition-all duration-200 ${
                   isHovered ? 'scale-125' : 'scale-100'
                 }`}
-                onMouseEnter={(e) => handleMarkerHover(farm, e)}
-                onMouseLeave={() => handleMarkerHover(null)}
-                onMouseMove={(e) => setMousePosition({ x: e.clientX, y: e.clientY })}
+                onMouseEnter={(e) => {
+                  handleMarkerHover(farm, e)
+                  setSelectedFarm(farm)
+                }}
+                onMouseLeave={() => {
+                  handleMarkerHover(null)
+                  setSelectedFarm(null)
+                }}
                 style={{
                   width: '24px',
                   height: '24px',
@@ -204,27 +299,7 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
         })}
         
 
-        {/* Custom tooltip */}
-        {tooltipFarm && (
-          <div
-            className="fixed z-50 bg-white border border-gray-300 rounded-lg shadow-lg p-2 text-sm pointer-events-none"
-            style={{
-              left: mousePosition.x + 10,
-              top: mousePosition.y - 40,
-              maxWidth: '200px',
-              wordWrap: 'break-word',
-              whiteSpace: 'normal'
-            }}
-          >
-            <div className="font-semibold text-gray-800">{tooltipFarm.farm_name}</div>
-            <div className="text-xs text-gray-600">
-              {getFarmHealth(tooltipFarm) === 'healthy' && '🟢 Healthy'}
-              {getFarmHealth(tooltipFarm) === 'warning' && '🟡 Warning'}
-              {getFarmHealth(tooltipFarm) === 'critical' && '🔴 Critical'}
-              {getFarmHealth(tooltipFarm) === 'unknown' && '⚪ Unknown'}
-            </div>
-          </div>
-        )}
+
 
         {selectedFarm && (
           <Popup

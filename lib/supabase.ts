@@ -51,6 +51,42 @@ export interface OperationalData {
   created_at: string
 }
 
+// Electrical component types
+export interface ElectricalComponent {
+  id: number
+  farm_id: number
+  component_type: string
+  component_name: string
+  status: string
+  installation_date: string
+  last_maintenance: string | null
+  created_at: string
+}
+
+export interface MaintenanceRecord {
+  id: number
+  component_id: number
+  maintenance_date: string
+  maintenance_type: string
+  description: string
+  technician_name: string
+  cost: number | null
+  next_maintenance_date: string | null
+  created_at: string
+}
+
+export interface GeneratorSpecification {
+  id: number
+  component_id: number
+  power_rating_kw: number
+  fuel_type: string
+  efficiency_percentage: number
+  manufacturer: string
+  model: string
+  year_manufactured: number
+  created_at: string
+}
+
 // Combined data type for dashboard
 export interface DashboardData {
   farm: Farm
