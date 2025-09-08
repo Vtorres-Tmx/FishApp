@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { SensorReading, WeatherData, OperationalData } from '../lib/supabase'
+import { SensorReading, WeatherData, OperationalData, ElectricalComponent, EnergyConsumptionData, FuelConsumptionData, GeneratorOperationalStatus } from '../lib/supabase'
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, TimeScale } from 'chart.js'
 import { Line } from 'react-chartjs-2'
 import 'chartjs-adapter-date-fns'
@@ -22,7 +22,11 @@ interface DynamicChartProps {
   sensorData: SensorReading[]
   weatherData: WeatherData[]
   operationalData: OperationalData[]
-  chartType: 'sensor' | 'weather' | 'operational'
+  electricalData: ElectricalComponent[]
+  energyData: EnergyConsumptionData[]
+  fuelData: FuelConsumptionData[]
+  generatorStatus: GeneratorOperationalStatus[]
+  chartType: 'sensor' | 'weather' | 'operational' | 'electrical'
 }
 
 const DynamicChart: React.FC<DynamicChartProps> = ({
@@ -30,6 +34,10 @@ const DynamicChart: React.FC<DynamicChartProps> = ({
   sensorData,
   weatherData,
   operationalData,
+  electricalData,
+  energyData,
+  fuelData,
+  generatorStatus,
   chartType
 }) => {
   const chartRef = useRef<ChartJS<'line'>>(null)
@@ -38,26 +46,61 @@ const DynamicChart: React.FC<DynamicChartProps> = ({
   const getFilteredData = () => {
     if (!farmName) return []
     
-    // Find farm ID by name (assuming we have access to farms data)
-    // For now, we'll filter by the first farm that matches
-    const farmId = sensorData.find(s => s.farm_id)?.farm_id || 1
-    
     switch (chartType) {
       case 'sensor':
         return sensorData
-          .filter(reading => reading.farm_id === farmId)
+          .filter(reading => {
+            // Check if reading has farm_name property or find by farm_id
+            if ('farm_name' in reading) {
+              return (reading as any).farm_name === farmName
+            }
+            return false
+          })
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
           .slice(-20) // Last 20 readings
       
       case 'weather':
         return weatherData
-          .filter(reading => reading.farm_id === farmId)
+          .filter(reading => {
+            if ('farm_name' in reading) {
+              return (reading as any).farm_name === farmName
+            }
+            return false
+          })
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
           .slice(-20)
       
       case 'operational':
         return operationalData
-          .filter(reading => reading.farm_id === farmId)
+          .filter(reading => {
+            if ('farm_name' in reading) {
+              return (reading as any).farm_name === farmName
+            }
+            return false
+          })
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+          .slice(-20)
+      
+      case 'electrical':
+        // Get generator components for this farm by name
+        const farmGenerators = electricalData.filter(comp => {
+          if ('farm_name' in comp) {
+            return (comp as any).farm_name === farmName && comp.component_type === 'generator'
+          }
+          return false
+        })
+        const generatorIds = farmGenerators.map(gen => gen.id)
+        
+        // Filter electrical measurement data by generator IDs
+        const filteredEnergyData = energyData.filter(data => {
+          if ('farm_name' in data) {
+            return (data as any).farm_name === farmName
+          }
+          return generatorIds.includes(data.component_id)
+        })
+        
+        // Return the most recent energy data for charting
+        return filteredEnergyData
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
           .slice(-20)
       
@@ -76,7 +119,12 @@ const DynamicChart: React.FC<DynamicChartProps> = ({
       }
     }
 
-    const labels = filteredData.map(item => new Date(item.timestamp))
+    const labels = filteredData.map(item => {
+      if (chartType === 'electrical') {
+        return new Date((item as EnergyConsumptionData).timestamp)
+      }
+      return new Date((item as any).timestamp)
+    })
 
     switch (chartType) {
       case 'sensor':
@@ -169,6 +217,46 @@ const DynamicChart: React.FC<DynamicChartProps> = ({
               data: operationalReadings.map(reading => reading.aerator_status),
               borderColor: 'rgb(99, 102, 241)',
               backgroundColor: 'rgba(99, 102, 241, 0.1)',
+              tension: 0.1,
+              yAxisID: 'y2'
+            }
+          ]
+        }
+
+      case 'electrical':
+        const energyReadings = filteredData as EnergyConsumptionData[]
+        return {
+          labels,
+          datasets: [
+            {
+              label: 'Active Power (kW)',
+              data: energyReadings.map(reading => reading.active_power_kw),
+              borderColor: 'rgb(34, 197, 94)',
+              backgroundColor: 'rgba(34, 197, 94, 0.1)',
+              tension: 0.1,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Energy Generated (kWh)',
+              data: energyReadings.map(reading => reading.energy_generated_kwh),
+              borderColor: 'rgb(59, 130, 246)',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              tension: 0.1,
+              yAxisID: 'y1'
+            },
+            {
+              label: 'Load Percentage (%)',
+              data: energyReadings.map(reading => reading.load_percentage),
+              borderColor: 'rgb(245, 158, 11)',
+              backgroundColor: 'rgba(245, 158, 11, 0.1)',
+              tension: 0.1,
+              yAxisID: 'y2'
+            },
+            {
+              label: 'Efficiency (%)',
+              data: energyReadings.map(reading => reading.efficiency_percent),
+              borderColor: 'rgb(168, 85, 247)',
+              backgroundColor: 'rgba(168, 85, 247, 0.1)',
               tension: 0.1,
               yAxisID: 'y2'
             }

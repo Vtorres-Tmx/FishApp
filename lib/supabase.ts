@@ -87,6 +87,59 @@ export interface GeneratorSpecification {
   created_at: string
 }
 
+export interface EnergyConsumptionData {
+  id: number
+  component_id: number
+  timestamp: string
+  voltage_l1_v: number
+  voltage_l2_v: number
+  voltage_l3_v: number
+  current_l1_a: number
+  current_l2_a: number
+  current_l3_a: number
+  power_factor: number
+  active_power_kw: number
+  frequency_hz: number
+  energy_consumed_kwh: number
+  energy_generated_kwh: number
+  load_percentage: number
+  efficiency_percent: number
+  created_at: string
+}
+
+export interface FuelConsumptionData {
+  id: number
+  component_id: number
+  timestamp: string
+  fuel_consumed_liters: number
+  fuel_rate_liters_per_hour: number
+  fuel_level_percent: number
+  operating_hours: number
+  load_percentage: number
+  fuel_efficiency_kwh_per_liter: number
+  fuel_cost_per_liter: number
+  total_fuel_cost: number
+  created_at: string
+}
+
+export interface GeneratorOperationalStatus {
+  id: number
+  component_id: number
+  timestamp: string
+  is_running: boolean
+  load_percentage: number
+  oil_pressure_bar: number
+  oil_temperature_celsius: number
+  coolant_temperature_celsius: number
+  battery_voltage_v: number
+  rpm: number
+  alarm_status: boolean
+  maintenance_due: boolean
+  auto_start_enabled: boolean
+  remote_start_enabled: boolean
+  created_at: string
+}
+
 // Combined data type for dashboard
 export interface DashboardData {
   farm: Farm

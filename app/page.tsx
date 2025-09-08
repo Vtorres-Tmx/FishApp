@@ -1,13 +1,15 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase, type Farm, type SensorReading, type WeatherData, type OperationalData } from '../lib/supabase'
+import { supabase, type Farm, type SensorReading, type WeatherData, type OperationalData, type ElectricalComponent, type EnergyConsumptionData, type FuelConsumptionData, type GeneratorOperationalStatus } from '../lib/supabase'
 import FarmOverview from '../components/FarmOverview'
 import SensorChart from '../components/SensorChart'
 import WeatherWidget from '../components/WeatherWidget'
 import OperationalStatus from '../components/OperationalStatus'
 import InteractiveMap from '../components/InteractiveMap'
 import DynamicChart from '../components/DynamicChart'
+import ElectricalMonitoring from '../components/ElectricalMonitoring'
+import ElectricalChart from '../components/ElectricalChart'
 import { Activity, Thermometer, Droplets, Wind, Map, BarChart3 } from 'lucide-react'
 
 interface DashboardData {
@@ -15,6 +17,10 @@ interface DashboardData {
   latestSensorData: (SensorReading & { farm_name: string })[]
   latestWeatherData: (WeatherData & { farm_name: string })[]
   latestOperationalData: (OperationalData & { farm_name: string })[]
+  latestElectricalData: (ElectricalComponent & { farm_name: string })[]
+  latestEnergyData: (EnergyConsumptionData & { farm_name: string })[]
+  latestFuelData: (FuelConsumptionData & { farm_name: string })[]
+  latestGeneratorStatus: (GeneratorOperationalStatus & { farm_name: string })[]
 }
 
 export default function Dashboard() {
@@ -22,12 +28,16 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [selectedFarm, setSelectedFarm] = useState<string>('all')
   const [hoveredFarm, setHoveredFarm] = useState<string | null>(null)
-  const [activeChartType, setActiveChartType] = useState<'sensor' | 'weather' | 'operational'>('sensor')
+  const [activeChartType, setActiveChartType] = useState<'sensor' | 'weather' | 'operational' | 'electrical'>('sensor')
   const [error, setError] = useState<string | null>(null)
   const [allData, setAllData] = useState<{
     sensorData: (SensorReading & { farm_name: string })[]
     weatherData: (WeatherData & { farm_name: string })[]
     operationalData: (OperationalData & { farm_name: string })[]
+    electricalData: (ElectricalComponent & { farm_name: string })[]
+    energyData: (EnergyConsumptionData & { farm_name: string })[]
+    fuelData: (FuelConsumptionData & { farm_name: string })[]
+    generatorStatus: (GeneratorOperationalStatus & { farm_name: string })[]
   } | null>(null)
   const [currentDataIndex, setCurrentDataIndex] = useState(0)
   const [isRealTimeActive, setIsRealTimeActive] = useState(false)
@@ -98,6 +108,49 @@ export default function Dashboard() {
 
       if (operationalError) throw operationalError
 
+      // Fetch ALL electrical data with farm names (manual join)
+      const { data: electricalData, error: electricalError } = await supabase
+        .from('electrical_components')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500)
+
+      if (electricalError) throw electricalError
+
+      // Fetch energy consumption data
+      const { data: energyData, error: energyError } = await supabase
+        .from('energy_consumption_data')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(500)
+
+      if (energyError) throw energyError
+
+      // Fetch fuel consumption data
+      const { data: fuelData, error: fuelError } = await supabase
+        .from('fuel_consumption_data')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(500)
+
+      if (fuelError) throw fuelError
+
+      // Fetch generator operational status
+      const { data: generatorStatus, error: generatorError } = await supabase
+        .from('generator_operational_status')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(500)
+
+      if (generatorError) throw generatorError
+
+      // Fetch farms for manual join
+      const { data: farmsForJoin, error: farmsJoinError } = await supabase
+        .from('farms')
+        .select('id, farm_name')
+
+      if (farmsJoinError) throw farmsJoinError
+
       // Transform data to include farm_name at the top level
       const transformedSensorData = sensorData?.map(item => ({
         ...item,
@@ -114,11 +167,47 @@ export default function Dashboard() {
         farm_name: item.farms.farm_name
       })) || []
 
+      // Create a farm lookup map for efficient joining
+      const farmLookup = farmsForJoin?.reduce((acc, farm) => {
+        acc[farm.id] = farm.farm_name
+        return acc
+      }, {} as Record<number, string>) || {}
+
+      const transformedElectricalData = electricalData?.map(item => ({
+        ...item,
+        farm_name: farmLookup[item.farm_id] || 'Unknown Farm'
+      })) || []
+
+      // Create component to farm lookup map
+      const componentToFarmLookup = electricalData?.reduce((acc, comp) => {
+        acc[comp.id] = comp.farm_id
+        return acc
+      }, {} as Record<number, number>) || {}
+
+      const transformedEnergyData = energyData?.map(item => ({
+        ...item,
+        farm_name: farmLookup[componentToFarmLookup[item.component_id]] || 'Unknown Farm'
+      })) || []
+
+      const transformedFuelData = fuelData?.map(item => ({
+        ...item,
+        farm_name: farmLookup[componentToFarmLookup[item.component_id]] || 'Unknown Farm'
+      })) || []
+
+      const transformedGeneratorStatus = generatorStatus?.map(item => ({
+        ...item,
+        farm_name: farmLookup[componentToFarmLookup[item.component_id]] || 'Unknown Farm'
+      })) || []
+
       // Store all data for cycling
       setAllData({
         sensorData: transformedSensorData,
         weatherData: transformedWeatherData,
-        operationalData: transformedOperationalData
+        operationalData: transformedOperationalData,
+        electricalData: transformedElectricalData,
+        energyData: transformedEnergyData,
+        fuelData: transformedFuelData,
+        generatorStatus: transformedGeneratorStatus
       })
 
       // Set initial display data
@@ -126,7 +215,11 @@ export default function Dashboard() {
         farms: farms || [],
         latestSensorData: transformedSensorData.slice(0, 20),
         latestWeatherData: transformedWeatherData.slice(0, 20),
-        latestOperationalData: transformedOperationalData.slice(0, 20)
+        latestOperationalData: transformedOperationalData.slice(0, 20),
+        latestElectricalData: transformedElectricalData.slice(0, 20),
+        latestEnergyData: transformedEnergyData.slice(0, 20),
+        latestFuelData: transformedFuelData.slice(0, 20),
+        latestGeneratorStatus: transformedGeneratorStatus.slice(0, 20)
       })
     } catch (err) {
       console.error('Error fetching dashboard data:', err)
@@ -143,7 +236,11 @@ export default function Dashboard() {
     const maxIndex = Math.max(
       Math.floor(allData.sensorData.length / batchSize),
       Math.floor(allData.weatherData.length / batchSize),
-      Math.floor(allData.operationalData.length / batchSize)
+      Math.floor(allData.operationalData.length / batchSize),
+      Math.floor(allData.electricalData.length / batchSize),
+      Math.floor(allData.energyData.length / batchSize),
+      Math.floor(allData.fuelData.length / batchSize),
+      Math.floor(allData.generatorStatus.length / batchSize)
     )
 
     const nextIndex = (currentDataIndex + 1) % maxIndex
@@ -156,7 +253,11 @@ export default function Dashboard() {
       farms: data.farms,
       latestSensorData: allData.sensorData.slice(startIdx, endIdx),
       latestWeatherData: allData.weatherData.slice(startIdx, endIdx),
-      latestOperationalData: allData.operationalData.slice(startIdx, endIdx)
+      latestOperationalData: allData.operationalData.slice(startIdx, endIdx),
+      latestElectricalData: allData.electricalData.slice(startIdx, endIdx),
+      latestEnergyData: allData.energyData.slice(startIdx, endIdx),
+      latestFuelData: allData.fuelData.slice(startIdx, endIdx),
+      latestGeneratorStatus: allData.generatorStatus.slice(startIdx, endIdx)
     })
     
     setLastUpdateTime(new Date())
@@ -335,6 +436,16 @@ export default function Dashboard() {
             >
               Operational
             </button>
+            <button
+              onClick={() => setActiveChartType('electrical')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeChartType === 'electrical'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Electrical
+            </button>
           </div>
         </div>
         
@@ -358,6 +469,10 @@ export default function Dashboard() {
                 sensorData={data?.latestSensorData || []}
                 weatherData={data?.latestWeatherData || []}
                 operationalData={data?.latestOperationalData || []}
+                electricalData={data?.latestElectricalData || []}
+                energyData={data?.latestEnergyData || []}
+                fuelData={data?.latestFuelData || []}
+                generatorStatus={data?.latestGeneratorStatus || []}
                 chartType={activeChartType}
               />
           </div>
@@ -407,8 +522,71 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* Real-time Electrical Monitoring */}
+      <ElectricalMonitoring selectedFarm={selectedFarm} />
+
+      {/* Electrical Trends Chart */}
+      <ElectricalChart selectedFarm={selectedFarm} />
+
       {/* Data Tables */}
       <div className="grid grid-cols-1 gap-6">
+        {/* Electrical Components Summary Table */}
+        <div className="card">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Electrical Components Summary</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Farm</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Component</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Installation Date</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Maintenance</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {data.latestElectricalData
+                  .filter(item => selectedFarm === 'all' || item.farm_name === selectedFarm)
+                  .slice(0, 10)
+                  .map((component) => (
+                    <tr key={`${component.farm_id}-${component.id}`}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {component.farm_name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {component.component_name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {component.component_type}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                          component.status === 'active' 
+                            ? 'bg-green-100 text-green-800'
+                            : component.status === 'maintenance'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {component.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {new Date(component.installation_date).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {component.last_maintenance 
+                          ? new Date(component.last_maintenance).toLocaleDateString()
+                          : 'N/A'
+                        }
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
         <div className="card">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Sensor Readings</h3>
           <div className="overflow-x-auto">

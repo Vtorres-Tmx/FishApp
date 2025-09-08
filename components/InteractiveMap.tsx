@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { Map, Marker, Popup } from 'react-map-gl/mapbox'
-import { Farm, SensorReading, WeatherData, OperationalData, ElectricalComponent, MaintenanceRecord, supabase } from '../lib/supabase'
+import { Farm, SensorReading, WeatherData, OperationalData, ElectricalComponent, MaintenanceRecord, EnergyConsumptionData, FuelConsumptionData, GeneratorOperationalStatus, supabase } from '../lib/supabase'
 
 interface InteractiveMapProps {
   farms: Farm[]
@@ -24,6 +24,9 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const [selectedFarm, setSelectedFarm] = useState<Farm | null>(null)
   const [maintenanceData, setMaintenanceData] = useState<MaintenanceRecord[]>([])
   const [electricalComponents, setElectricalComponents] = useState<ElectricalComponent[]>([])
+  const [energyData, setEnergyData] = useState<EnergyConsumptionData[]>([])
+  const [fuelData, setFuelData] = useState<FuelConsumptionData[]>([])
+  const [generatorStatus, setGeneratorStatus] = useState<GeneratorOperationalStatus[]>([])
 
   // Fetch maintenance and electrical data
   useEffect(() => {
@@ -45,6 +48,8 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
         // Fetch maintenance records for these components
         if (components && components.length > 0) {
           const componentIds = components.map(c => c.id)
+          
+          // Fetch maintenance records
           const { data: maintenance, error: maintenanceError } = await supabase
             .from('maintenance_records')
             .select('*')
@@ -53,10 +58,51 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
           
           if (maintenanceError) {
             console.error('Error fetching maintenance records:', maintenanceError)
-            return
+          } else {
+            setMaintenanceData(maintenance || [])
           }
           
-          setMaintenanceData(maintenance || [])
+          // Fetch latest energy consumption data
+          const { data: energy, error: energyError } = await supabase
+            .from('energy_consumption_data')
+            .select('*')
+            .in('component_id', componentIds)
+            .order('timestamp', { ascending: false })
+            .limit(componentIds.length)
+          
+          if (energyError) {
+            console.error('Error fetching energy data:', energyError)
+          } else {
+            setEnergyData(energy || [])
+          }
+          
+          // Fetch latest fuel consumption data
+          const { data: fuel, error: fuelError } = await supabase
+            .from('fuel_consumption_data')
+            .select('*')
+            .in('component_id', componentIds)
+            .order('timestamp', { ascending: false })
+            .limit(componentIds.length)
+          
+          if (fuelError) {
+            console.error('Error fetching fuel data:', fuelError)
+          } else {
+            setFuelData(fuel || [])
+          }
+          
+          // Fetch latest generator operational status
+          const { data: status, error: statusError } = await supabase
+            .from('generator_operational_status')
+            .select('*')
+            .in('component_id', componentIds)
+            .order('timestamp', { ascending: false })
+            .limit(componentIds.length)
+          
+          if (statusError) {
+            console.error('Error fetching generator status:', statusError)
+          } else {
+            setGeneratorStatus(status || [])
+          }
         }
       } catch (error) {
         console.error('Error in fetchMaintenanceData:', error)
@@ -64,6 +110,11 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
     }
     
     fetchMaintenanceData()
+    
+    // Set up periodic refresh for real-time data
+    const interval = setInterval(fetchMaintenanceData, 30000) // Refresh every 30 seconds
+    
+    return () => clearInterval(interval)
   }, [])
   
   // Calculate center and zoom based on farms
@@ -147,12 +198,23 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
       .filter(reading => reading.farm_id === farm.id)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
     
-    // Get generator and maintenance info for this farm
+    // Get generator and related data for this farm
     const farmGenerator = electricalComponents.find(comp => comp.farm_id === farm.id)
     const latestMaintenance = farmGenerator 
       ? maintenanceData
           .filter(record => record.component_id === farmGenerator.id)
           .sort((a, b) => new Date(b.maintenance_date).getTime() - new Date(a.maintenance_date).getTime())[0]
+      : null
+    
+    // Get latest electrical data for this generator
+    const latestEnergyData = farmGenerator 
+      ? energyData.find(data => data.component_id === farmGenerator.id)
+      : null
+    const latestFuelData = farmGenerator 
+      ? fuelData.find(data => data.component_id === farmGenerator.id)
+      : null
+    const latestGeneratorStatus = farmGenerator 
+      ? generatorStatus.find(status => status.component_id === farmGenerator.id)
       : null
     
     const health = getFarmHealth(farm)
@@ -196,7 +258,7 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
           <p className="text-xs text-gray-500">No sensor data available</p>
         )}
         
-        {/* Generator and Maintenance Information */}
+        {/* Generator and Electrical Data */}
         {farmGenerator && (
           <div className="mt-2 pt-2 border-t border-gray-200">
             <div className="text-xs font-medium text-gray-700 mb-1">⚡ Generator Status</div>
@@ -204,32 +266,71 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
               <div className="flex justify-between">
                 <span>Status:</span>
                 <span className={`font-medium ${
-                  farmGenerator.status === 'operational' ? 'text-green-600' :
+                  latestGeneratorStatus?.is_running ? 'text-green-600' :
                   farmGenerator.status === 'maintenance' ? 'text-yellow-600' :
                   'text-red-600'
                 }`}>
-                  {farmGenerator.status.charAt(0).toUpperCase() + farmGenerator.status.slice(1)}
+                  {latestGeneratorStatus?.is_running ? 'Running' : 'Stopped'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span>Name:</span>
                 <span className="font-medium truncate">{farmGenerator.component_name}</span>
               </div>
-              {latestMaintenance && (
+              
+              {/* Real-time Electrical Data */}
+              {latestEnergyData && (
                 <>
+                  <div className="mt-2 pt-1 border-t border-gray-100">
+                    <div className="text-xs font-medium text-blue-600 mb-1">📊 Live Electrical Data</div>
+                    <div className="grid grid-cols-2 gap-1 text-xs">
+                      <div className="flex justify-between">
+                        <span>Voltage L1:</span>
+                        <span className="font-medium text-blue-600">{latestEnergyData.voltage_l1_v.toFixed(0)}V</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Current L1:</span>
+                        <span className="font-medium text-orange-600">{latestEnergyData.current_l1_a.toFixed(0)}A</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Power:</span>
+                        <span className="font-medium text-red-600">{latestEnergyData.active_power_kw.toFixed(0)}kW</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Frequency:</span>
+                        <span className="font-medium text-green-600">{latestEnergyData.frequency_hz.toFixed(1)}Hz</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Load:</span>
+                        <span className="font-medium text-purple-600">{latestEnergyData.load_percentage.toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>PF:</span>
+                        <span className="font-medium text-indigo-600">{latestEnergyData.power_factor.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {/* Fuel Data */}
+              {latestFuelData && (
+                <div className="mt-1 pt-1 border-t border-gray-100">
                   <div className="flex justify-between">
-                    <span>🔧 Last Maintenance:</span>
+                    <span>⛽ Fuel Level:</span>
+                    <span className="font-medium text-amber-600">{latestFuelData.fuel_level_percent.toFixed(0)}%</span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Maintenance Info */}
+              {latestMaintenance && (
+                <div className="mt-1 pt-1 border-t border-gray-100">
+                  <div className="flex justify-between">
+                    <span>🔧 Last Service:</span>
                     <span className="font-medium">
                       {new Date(latestMaintenance.maintenance_date).toLocaleDateString()}
                     </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Type:</span>
-                    <span className="font-medium truncate">{latestMaintenance.maintenance_type}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Technician:</span>
-                    <span className="font-medium truncate">{latestMaintenance.technician_name}</span>
                   </div>
                   {latestMaintenance.next_maintenance_date && (
                     <div className="flex justify-between">
@@ -239,14 +340,14 @@ const InteractiveMap: React.FC<InteractiveMapProps> = ({
                       </span>
                     </div>
                   )}
-                </>
+                </div>
               )}
             </div>
           </div>
         )}
       </div>
     )
-  }, [sensorData, getFarmHealth, electricalComponents, maintenanceData])
+  }, [sensorData, getFarmHealth, electricalComponents, maintenanceData, energyData, fuelData, generatorStatus])
 
   return (
     <div className="w-full h-96 rounded-lg overflow-hidden border border-gray-200">
